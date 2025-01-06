@@ -41,8 +41,9 @@ local function start_plugin(plugin)
     local cmd
     local dir = ""
 
-    if fn.isdirectory(path) == 1 then
-        dir = path
+    local expanded_path = fn.expand(path)
+    if fn.isdirectory(expanded_path) ~= 0 then
+        dir = expanded_path
         cmd = "cargo run --"
     else
         cmd = path
@@ -90,4 +91,3 @@ function M.plugins(plugins)
 end
 
 return M
-
