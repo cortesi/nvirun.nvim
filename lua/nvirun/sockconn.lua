@@ -1,91 +1,56 @@
 local M = {}
 
-function M.create_connection(socket_path, service_name, ping_method)
+---@param socket_path string
+---@param plugin Plugin
+function M.create_connection(socket_path, plugin)
     local connection = {}
-    connection.channel_id = nil
-    connection.reconnect_interval = 1000 -- 1 second
-    connection.check_interval = 5000     -- 5 seconds
-    connection.ping_method = ping_method or "__nvi_ping"
+    connection.restart_timer = nil
+    connection.restart_interval = 1000 -- 1 second
+
+    local function start_process(plugin, spath)
+        local cmd = plugin.cmd .. " connect " .. spath
+        local job_id = vim.fn.jobstart(cmd, {
+            cwd = plugin.dir,
+            on_exit = function(_, exit_code)
+                if exit_code ~= 0 then
+                    connection.log(string.format("Process exited with code %d, restarting...", exit_code))
+                    -- Schedule restart
+                    connection.restart_timer = vim.defer_fn(function()
+                        connection.job_id = start_process(plugin, spath)
+                    end, connection.restart_interval)
+                else
+                    connection.log("Process exited normally")
+                end
+            end,
+        })
+
+        if job_id <= 0 then
+            error(string.format("Failed to start plugin %s", plugin.name))
+        end
+        return job_id
+    end
+
+    connection.job_id = start_process(plugin, socket_path)
 
     function connection.log(message)
         vim.schedule(function()
-            print(string.format("[%s] %s", service_name, message))
+            print(string.format("[%s] %s", plugin.name, message))
         end)
     end
 
-    function connection.connect_to_socket()
-        local success, result = pcall(function()
-            return vim.fn.sockconnect("pipe", socket_path, { rpc = true })
-        end)
-
-        if success and type(result) == "number" and result > 0 then
-            connection.channel_id = result
-            connection.log("Connected successfully")
-            connection.setup_disconnect_detection()
-            return true
-        else
-            return false
+    function connection.stop()
+        if connection.restart_timer then
+            connection.restart_timer:close()
+            connection.restart_timer = nil
         end
-    end
-
-    function connection.setup_disconnect_detection()
-        -- Set up a timer to periodically check the connection
-        connection.check_timer = vim.loop.new_timer()
-        connection.check_timer:start(connection.check_interval, connection.check_interval, vim.schedule_wrap(function()
-            if not connection.is_connected() then
-                connection.log("Disconnected (detected during periodic check)")
-                connection.disconnect()
-                connection.try_reconnect()
-            end
-        end))
-    end
-
-    function connection.try_reconnect()
-        if not connection.channel_id then
-            if connection.connect_to_socket() then
-                connection.log("Reconnected successfully")
-            else
-                vim.defer_fn(connection.try_reconnect, connection.reconnect_interval)
-            end
+        if connection.job_id then
+            vim.fn.jobstop(connection.job_id)
+            connection.job_id = nil
         end
-    end
-
-    function connection.disconnect()
-        if connection.channel_id then
-            pcall(vim.fn.chanclose, connection.channel_id)
-            connection.channel_id = nil
-            if connection.check_timer then
-                connection.check_timer:stop()
-                connection.check_timer:close()
-                connection.check_timer = nil
-            end
-            connection.log("Disconnected")
-        end
-    end
-
-    function connection.is_connected()
-        if not connection.channel_id then
-            return false
-        end
-
-        local success, result = pcall(function()
-            return vim.rpcrequest(connection.channel_id, connection.ping_method)
-        end)
-
-        return success and result == true
-    end
-
-    function connection.reconnect()
-        connection.disconnect()
-        connection.try_reconnect()
-    end
-
-    -- Initial connection attempt
-    if not connection.connect_to_socket() then
-        vim.defer_fn(connection.try_reconnect, connection.reconnect_interval)
     end
 
     return connection
 end
 
 return M
+

@@ -1,6 +1,10 @@
 local fn = vim.fn
+local sockconn = require("nvirun.sockconn")
 
 local M = {}
+
+---@type table<string, table>
+M.connections = {}
 
 ---@type string
 M.socket_path = nil
@@ -44,11 +48,16 @@ local function start_plugin(plugin)
     local expanded_path = fn.expand(path)
     if fn.isdirectory(expanded_path) ~= 0 then
         dir = expanded_path
-        cmd = "cargo run --"
+        cmd = "cargo run --release --"
     else
         cmd = path
     end
-    local name = fn.fnamemodify(path, ":t")
+    local name
+    if fn.isdirectory(expanded_path) ~= 0 then
+        name = fn.fnamemodify(expanded_path, ":t")
+    else
+        name = path
+    end
 
     local command = {
         dir = dir,
@@ -87,6 +96,10 @@ function M.plugins(plugins)
         end
         local command = start_plugin(plugin)
         table.insert(M.running, command)
+
+        -- Start the plugin process
+        local conn = sockconn.create_connection(M.socket_path, command)
+        M.connections[command.name] = conn
     end
 end
 
